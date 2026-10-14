@@ -17,7 +17,77 @@ from pathlib import Path
 import pdfplumber
 import pandas as pd
 
+import re
 
+# Australian state codes (used as anchor to find where the address starts)
+AU_STATES = r"(?:VIC|NSW|QLD|SA|WA|TAS|NT|ACT)"
+
+# Regex to detect the start of an address inside a combined string.
+# It looks for the FIRST occurrence of a digit that begins the street number,
+# but only if what follows looks like "<digits> <street> ... <STATE>, <postcode>"
+ADDRESS_PATTERN = re.compile(
+    rf"""
+    (?P<street>
+        \d+[A-Za-z]?          # street number (e.g. 5, 112, 41B)
+        (?:[/\-\s]\d+[A-Za-z]?)*   # optional unit like 41/380 or 5-7
+        \s+
+        [A-Z][A-Za-z'\- ]+?   # street name
+        ,?\s*
+        [A-Z][A-Za-z'\- ]+?   # suburb
+        ,?\s*
+        {AU_STATES}           # state
+        ,?\s*
+        \d{{4}}               # postcode
+    )
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def split_name_and_address(cell: str) -> tuple[str, str]:
+    """
+    Split 'Customer/Destination' into (cafe_name, address).
+    """
+    if not cell:
+        return "", ""
+
+    text = cell.strip()
+
+    # Prefix words that belong to the address
+    PREFIX = r"(?:SHOP|UNIT|SUITE|LEVEL|LOT|TENANCY|SHOPS|UNITS|SUITES)"
+
+    patterns = [
+        # 1. SHOP L01 / SHOP K06 / SHOP 8 / UNIT 5B / LOT 1 — preferred
+        rf"\b{PREFIX}\s*[A-Z]?\d+[A-Za-z]?\b",
+        # 2. Plain street number, optionally with slash or hyphen range
+        r"\b\d+[A-Za-z]?(?:\s*[/\-]\s*\d+[A-Za-z]?)*\s+[A-Za-z]",
+        # 3. Broadest fallback: any "number + letter"
+        r"\b\d+[A-Za-z]?\s+[A-Za-z]",
+    ]
+
+    best_start = None
+    for pat in patterns:
+        for m in re.finditer(pat, text):
+            # Skip digits inside parentheses like "(113)"
+            if text[max(0, m.start() - 1):m.start()] == "(":
+                continue
+            # Skip the leading "@ 7 CAFE" / "@ 7 GRAMS" case
+            prefix = text[:m.start()].strip()
+            if prefix.startswith("@") and len(prefix.split()) <= 2:
+                continue
+            best_start = m.start() if best_start is None else min(best_start, m.start())
+
+    if best_start is None:
+        return text, ""
+
+    name = text[:best_start].strip().rstrip(", -")
+    address = text[best_start:].strip().lstrip(", -")
+
+    # Sanity check
+    if len(name) < 2 or not re.search(r"\d", address):
+        return text, ""
+
+    return name, address
 # Exact column order as they appear in the PDF
 COLUMNS = [
     "Customer/Destination",
@@ -85,6 +155,23 @@ def extract_rows_from_table(table) -> list[dict]:
         if not record["Customer/Destination"]:
             record["Customer/Destination"] = current_route
 
+                # Split the combined name+address into two columns
+        combined = record.get("Customer/Destination", "")
+        name, address = split_name_and_address(combined)
+                # Flag suspicious splits for human review
+        issues = []
+        if not name:
+            issues.append("no name")
+        if not address:
+            issues.append("no address")
+        elif not re.search(r"\d{4}", address):
+            issues.append("no postcode")
+        elif len(address.split()) < 3:
+            issues.append("short address")
+        record["Needs Review"] = "⚠️ " + ", ".join(issues) if issues else ""
+        record["Cafe Name"] = name
+        record["Address"] = address
+
         record["Route"] = current_route
         rows.append(record)
 
@@ -122,7 +209,7 @@ def pdf_to_dataframe(source) -> pd.DataFrame:
 
     # Put Route first, then PDF columns, then Source Page
     if not df.empty:
-        ordered = ["Route"] + COLUMNS + ["Source Page"]
+        ordered = ["Route", "Cafe Name", "Address", "Needs Review"] + COLUMNS + ["Source Page"]
         ordered = [c for c in ordered if c in df.columns]
         df = df[ordered]
 
