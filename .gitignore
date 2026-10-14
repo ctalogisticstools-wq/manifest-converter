@@ -1,0 +1,50 @@
+# ---- Virtual environment ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- Python cache ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# ---- Distribution / packaging ----
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---- Environment variables / secrets ----
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+
+# ---- IDE ----
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Project data (customer PDFs & generated Excel) ----
+# NEVER commit real manifests or outputs — they contain sensitive info
+*.pdf
+*.xlsx
+*.xls
+*.csv
+
+# ---- Streamlit ----
+.streamlit/secrets.toml
+
+# ---- Logs ----
+*.log
+logs/
